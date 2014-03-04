@@ -1,14 +1,14 @@
 <?php
+
 class funcs {
    private $dbhost       = "galaxy.umassmed.edu";
    private $db           = "biocore";
    private $dbuser       = "biocore";
    private $dbpass       = "biocore2013";
-   private $edir         = "/isilon_temp/garber/bin/workflow";
-   private $remotehost   = "hpcc01.umassmed.edu"; 
-   private $qstat        = "export SGE_ROOT=/sge;/sge/bin/lx24-amd64/qstat";
-   private $qsub         = "export SGE_ROOT=/sge;/sge/bin/lx24-amd64/qsub";
-   private $python       = "export PYTHONPATH=/share/lib/python2.6;/share/bin/python";
+   private $edir         = "/project/umw_biocore/bin/workflow";
+   private $remotehost   = "ghpcc06.umassrc.org"; 
+   private $bjobs        = "source /etc/profile;bjobs";
+   private $python       = "source /etc/profile;module load python/2.7.5;python";
    
    function getKey()
    {
@@ -53,58 +53,16 @@ class funcs {
      }
         
    }
-   function submitJob($servicename, $wkey, $username, $jobname, $run_script)
-   {
-       $com="ssh $username@".$this->remotehost." \"".$this->qsub." $run_script\""; 
-       $output=$this->syscall($com);
-       $words = explode(" ", $output);
-       $job_num = $words[2];
-    
-       $com="ssh $username@".$this->remotehost."  \"".$this->python." ".$this->edir."/scripts/jobStatus.py -d ".$this->dbhost." -u ".$username." -k ".$wkey." -s ".$servicename." -t dbSubmitJob -n ".$job_num." -j $jobname -m 1 -c $run_script\"";
-
-       $retval=system($com." &> /tmp/error ");
-       return "RUNNING:SubmitJob";
-   }
-   
-   function restartJob($servicename, $wkey, $job_num, $jobname, $username)
-   {
-      $sql="select job_id, run_script, jobname from jobs where wkey='$wkey' and jobname='$jobname' and jobstatus=2 and result<3";
-      $res = $this->runSQL($sql);
-      if ($res->num_rows>1)
-      {
-          $sql="update jobs set jobstatus=3 where wkey='$wkey' and jobstatus=2 and jobname='$jobname'";
-          $res = $this->runSQL($sql);
-          return "ERROR: Please check JOB# $job_num output to see the error!!!"; 
-      }
-      
-      $sql="select job_id, run_script, jobname from jobs where wkey='$wkey' and job_num='$job_num' and jobstatus=1 and result<3";
-      $res = $this->runSQL($sql);
-      
-      if (is_object($res))
-      {
-          $row = $res->fetch_assoc();
-          $this->submitJob($servicename, $wkey, $username, $row['jobname'], $row['run_script']);
-          
-          $sql="update jobs set jobstatus=2 where job_id='".$row['job_id']."'";
-          $res = $this->runSQL($sql);
-      }
-      return "RUNNING:Restart";
-   }
    
    function checkJobInCluster($job_num, $username)
    {
-      $com="ssh $username@".$this->remotehost." \"".$this->qstat."|grep $job_num\"";
-      #return $com;
+      $com="ssh $username@".$this->remotehost." \"".$this->bjobs." $job_num\"|grep ".$job_num."|awk '{print \$3\"\\t\"\$1}'";
       $retval=$this->syscall($com);
-      
-      if ($retval==""){
-	return 0; #this job is not working
-      }
-      elseif(eregi("^ERROR", $retval))
+      while(eregi("is not found", $retval))
       {
-        return $retval;
+         $retval=$this->syscall($com);
       }
-      return $retval; #this job is working
+      return $retval;
    }
    function checkStatus($servicename, $wkey)
    {
@@ -127,35 +85,29 @@ class funcs {
              # If it doesn't turn Error and if job is working it turns wkey to che
              $retval=$this->checkJobInCluster($row['job_num'], $row['username']);
              #return $retval;
-             if ($retval==0)
+
+             if(eregi("^EXIT", $retval))
              {
-                $retRestart=$this->restartJob($servicename, $wkey, $row['job_num'], $row['jobname'], $row['username']);
-                if(eregi("^ERROR", $retRestart))
-                {
-                   return $retRestart;
-                }
+               $sql="SELECT j.jobname, jo.jobout FROM biocore.jobs j, biocore.jobsout jo where j.wkey=jo.wkey and j.job_num=jo.jobnum and j.job_num=".$row['job_num']." and jo.wkey='$wkey'";
+               $resout = $this->runSQL($sql);
+               $rowout=$resout->fetch_assoc();
+               require_once('class.html2text.inc');
+
+               $h2t =& new html2text($rowout['jobout']);
+               $jobout=$h2t->get_text();
+               return 'ERROR:'.$retval."\n".$rowout['jobname']." Failed\nCheck LSF output\n". $jobout;
              }
-             elseif(eregi("^ERROR", $retval))
-             {
-                return $retval;
-             }
-             #else
-             #{
-               
-             #   return "HERE1:$wkey:$retval";
-             #}
            }
          }
          else
          {
-              return "Service ended successfully!!!";
+             return "Service ended successfully!!!";
          }
-         return 'RUNNING:'.$retval.":num_rows:$num_rows:$washere";
+         return 'RUNNING:'.$retval;
          #return "RUNNING";
       }
       return 'START';
    }
-   
 
    
    function getServiceOrder($workflow_id, $service_id, $wkey)
@@ -334,10 +286,16 @@ class funcs {
                 if ($defaultparam != "") 
                    $dpf="-p $defaultparam";
 
-                $com="ssh $username@".$this->remotehost." \"".$this->python." ".$this->edir."/scripts/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \\\"$command\\\" -n $servicename -s $servicename\"";
-                $retval=system($com." &> /tmp/error ");
+                $com="ssh $username@".$this->remotehost." \"".$this->python." ".$this->edir."/scripts/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \\\"$command\\\" -n $servicename -s $servicename\" 2>&1";
+                $retval=system($com);
+                #return $com;
+                if(eregi("Error", $retval))
+                {
+                   return "ERROR: $retval";
+                }
                 #return $com;
                 return "RUNNING:$com";
+                #return "RUNNING";
 	}
    }
 
@@ -347,6 +305,7 @@ class funcs {
       $result = $this->runSQL($sql);
       #Get how many jobs hasn't finished
       $ret=1;
+      return $ret;
       if (is_object($result))
       {
 	 while($row = $result->fetch_row())
@@ -354,8 +313,7 @@ class funcs {
 	    $username=$row[0];
 	    $jobnum=$row[1];
 	    $retval=$this->checkJobInCluster($jobnum, $username);
-	    
-	    if ($retval==0) #This job is not working
+	    if(eregi("^EXIT", $retval)) 
             {
 	      $ret=0;
 	    }
