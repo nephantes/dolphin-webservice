@@ -97,6 +97,16 @@ class funcs {
                $jobout=$h2t->get_text();
                return 'ERROR:'.$retval."\n".$rowout['jobname']." Failed\nCheck LSF output\n". $jobout;
              }
+             if(eregi("DONE", $retval))
+             {
+               $sql = "select * from biocore.jobs where result=3 and job_num='".$row['job_num']."' and wkey='$wkey'";
+               $result = $this->runSQL($sql);
+               if (!is_object($result) )
+               { 
+                 $sql = "UPDATE biocore.jobs set result='3', end_time=now() where job_num='".$row['job_num']."' and wkey='$wkey'"; 
+                 $result = $this->runSQL($sql);
+               }
+             } 
            }
          }
          else
