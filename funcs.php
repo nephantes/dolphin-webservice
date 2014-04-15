@@ -56,7 +56,7 @@ class funcs {
    
    function checkJobInCluster($job_num, $username)
    {
-      $com="ssh $username@".$this->remotehost." \"".$this->bjobs." $job_num\"|grep ".$job_num."|awk '{print \$3\"\\t\"\$1}'";
+      $com="ssh -o ConnectTimeout=30 $username@".$this->remotehost." \"".$this->bjobs." $job_num\"|grep ".$job_num."|awk '{print \$3\"\\t\"\$1}'";
       $retval=$this->syscall($com);
       while(eregi("is not found", $retval))
       {
@@ -72,6 +72,8 @@ class funcs {
      $num_rows =$res->num_rows;   
      if (is_object($res) && $num_rows>0)
      {
+        $rowser=$res->fetch_assoc();
+        $service_id=$rowser['service_id'];
         $sql="select DISTINCT j.job_num job_num, j.jobname jobname, j.jobstatus jobstatus, j.result jresult, s.username username from jobs j, services s where s.service_id=j.service_id and s.servicename='$servicename' and wkey='$wkey' and jobstatus=1 and result<3";
         #return $sql;
         $res = $this->runSQL($sql);
@@ -99,12 +101,20 @@ class funcs {
              }
              if(eregi("DONE", $retval))
              {
-               $sql = "select * from biocore.jobs where result=3 and job_num='".$row['job_num']."' and wkey='$wkey'";
+               $jn=rtrim(substr($retval, 5));
+               $sql = "select * from biocore.jobs where result=3 and job_num='".$jn."' and wkey='$wkey'";
                $result = $this->runSQL($sql);
-               if (!is_object($result) )
+               if (is_object($result) )
                { 
-                 $sql = "UPDATE biocore.jobs set result='3', end_time=now() where job_num='".$row['job_num']."' and wkey='$wkey'"; 
+                 $sql = "UPDATE biocore.jobs set result='3', end_time=now() where job_num='".$jn."' and wkey='$wkey'"; 
                  $result = $this->runSQL($sql);
+               }
+               else
+               {
+                  $sql = "insert into jobs(`username`, `wkey`, `jobname`, `service_id`, `result`, `submit_time`, `start_time`,`end_time`,`job_num`) values ('".$row['username']."', '$wkey', '$servicename', '$service_id', '3', now(), now(), now(),  '$jn' )";
+
+                  $result = $this->runSQL($sql);
+
                }
              } 
            }
@@ -113,7 +123,8 @@ class funcs {
          {
              return "Service ended successfully!!!";
          }
-         return 'RUNNING:'.$retval;
+         return "RUNNING(1):$retval";
+         #return "RUNNING:(1)[$service_id][jn=$jn][".$retval."]";
          #return "RUNNING";
       }
       return 'START';
@@ -279,13 +290,19 @@ class funcs {
         $defaultparam = $wf[3];
 
         $service_id=$this->getId("service", $username, $servicename, $wkey);
-	// sql query for INSERT INTO service_run
-	$sql = "INSERT INTO `service_run` (`service_id`, `wkey`, `input`,`result`, `start_time`) VALUES ('$service_id', '$wkey', '', '0', now())"; 
+
+        $sql = "SELECT service_id FROM biocore.service_run where wkey='$wkey' and service_id='$service_id';";
+        $res = $this->runSQL($sql);
+	if (empty($res)=="")
+        {
+
+	  // sql query for INSERT INTO service_run
+	  $sql = "INSERT INTO `service_run` (`service_id`, `wkey`, `input`,`result`, `start_time`) VALUES ('$service_id', '$wkey', '', '0', now())"; 
         
-        #return "$username:$password<BR>";
+           #return "$username:$password<BR>";
         
-	if($result=$this->runSQL($sql))
-	{	
+       	  if($result=$this->runSQL($sql))
+	  {	
 		### RUN THE JOB HERE AND UPDATE THE RESULT 1 WHEN IT IS FINISHED
                 $command=$this->getCommand($servicename, $username, $inputcommand, $defaultparam);
 
@@ -296,7 +313,7 @@ class funcs {
                 if ($defaultparam != "") 
                    $dpf="-p $defaultparam";
 
-                $com="ssh $username@".$this->remotehost." \"".$this->python." ".$this->edir."/scripts/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \\\"$command\\\" -n $servicename -s $servicename\" 2>&1";
+                $com="ssh -o ConnectTimeout=30 $username@".$this->remotehost." \"".$this->python." ".$this->edir."/scripts/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \\\"$command\\\" -n $servicename -s $servicename\" 2>&1";
                 $retval=system($com);
                 #return $com;
                 if(eregi("Error", $retval))
@@ -304,16 +321,17 @@ class funcs {
                    return "ERROR: $retval";
                 }
                 #return $com;
-                return "RUNNING:$com";
+                return "RUNNING(2):$com";
                 #return "RUNNING";
-	}
+	  }
+        }
    }
 
    function checkLastServiceJobs($wkey)
    {
       $sql = "SELECT username, job_num from jobs where service_id=(SELECT service_id FROM biocore.service_run where wkey='$wkey' order by service_run_id desc limit 1)  and wkey='$wkey' and jobstatus=1;";
       $result = $this->runSQL($sql);
-      #Get how many jobs hasn't finished
+      #Get how many /jobs hasn't finished
       $ret=1;
       return $ret;
       if (is_object($result))
@@ -334,6 +352,10 @@ class funcs {
    }
    function endWorkflow($wkey)
    {
+        $sql = "update workflow_run set result='1', end_time=now() where wkey='$wkey'";
+        $result = $this->runSQL($sql);   
+		   #return $sql;
+        return "Success!!!";
         $sql1 = "SELECT sum(w.result) from (SELECT result from workflow_services ws left join service_run s on ws.service_id=s.service_id where ws.workflow_id=(SELECT workflow_id FROM biocore.workflow_run wr where wkey='$wkey') and wkey='$wkey') w";
         $result1 = $this->runSQL($sql1);
 	#Get how many service successfuly finished
