@@ -32,16 +32,54 @@ class funcs {
 	if (mysqli_connect_errno()) { 
   		exit('Connect failed: '. mysqli_connect_error());
 	}
-	$result=$link->query($sql);
+        $i=0;
+	while($i<3)
+        {
+	  $result=$link->query($sql);
+
+	  if ($result) 
+	  {
+	        $link->close();
+	 	return $result;
+	  }
+          sleep(5*($i+1)); 
+	  $i++;
+        }
 	$link->close();
-	if ($result) 
-	{
-		return $result;
-	}
 	return $sql;
+   }
+   function runSQL1($sql, $sql1)
+   {
+	$link = new mysqli($this->dbhost, $this->dbuser, $this->dbpass, $this->db);
+	// check connection
+	if (mysqli_connect_errno()) { 
+  		exit('Connect failed: '. mysqli_connect_error());
+	}
+        $i=0;
+	while($i<3)
+        {
+	  $result=$link->query($sql);
+          $err='MySQL err: '.mysql_errno($link).': '.mysql_error($link)."\n";
+	  $res=$link->query($sql1);
+          $num_rows =$res->num_rows;
+	  $extra="i=".$i;
+          if ($result && is_object($res) && $num_rows>0)
+          {
+             $rowser=$res->fetch_assoc();
+             $extra=$rowser['job_id'].":".$rowser['submit_time'].":".$rowser['start_time'].":".$rowser['end_time'];
+	     $link->close();
+                
+	     return $result.":[$extra][$err]\n";
+	  }
+          sleep(5*($i+1)); 
+	  $i++;
+        }
+	$link->close();
+	return $sql."[$err]";
    }
    function syscall($command)
    {
+    $result="";
     if ($proc = popen("($command)2>&1","r")){
         while (!feof($proc)) $result .= fgets($proc, 1000);
         pclose($proc);
@@ -64,9 +102,23 @@ class funcs {
       }
       return $retval;
    }
+   function checkJobInDB($wkey, $job_num, $username)
+   {
+      sleep(5);
+      $sql="select * from jobs j where wkey='$wkey' and job_num='$job_num' and result=3 and username='$username'";
+      $res = $this->runSQL($sql);
+      $num_rows =$res->num_rows;   
+      #Check if there are jobs which are failed or running
+      if ($num_rows > 0 )
+      {
+         return "Job Finsihed Sucessfully!!!"; 
+      }
+      return 0;
+   }
+   
    function checkStatus($servicename, $wkey)
    {
-     $sql="select * from jobs j, services s where s.service_id=j.service_id and s.servicename='$servicename' and wkey='$wkey'";
+     $sql="select * from jobs j, services s where s.service_id=j.service_id and s.servicename='$servicename' and j.wkey='$wkey'";
         #return $sql;
      $res = $this->runSQL($sql);
      $num_rows =$res->num_rows;   
@@ -75,7 +127,8 @@ class funcs {
         $rowser=$res->fetch_assoc();
         $service_id=$rowser['service_id'];
         $sql="select DISTINCT j.job_num job_num, j.jobname jobname, j.jobstatus jobstatus, j.result jresult, s.username username from jobs j, services s where s.service_id=j.service_id and s.servicename='$servicename' and wkey='$wkey' and jobstatus=1 and result<3";
-        #return $sql;
+        
+	#return $sql;
         $res = $this->runSQL($sql);
         $num_rows =$res->num_rows;   
         #Check if there are jobs which are failed or running
@@ -87,7 +140,14 @@ class funcs {
              # If it doesn't turn Error and if job is working it turns wkey to che
              $retval=$this->checkJobInCluster($row['job_num'], $row['username']);
              #return $retval;
-
+	     /*if ($retval==0)
+             {
+               if ($ret=$this->checkJobInDB($wkey, $row['job_num'], $row['username']))
+               {
+                 return $ret;
+               }
+                
+             }*/
              if(eregi("^EXIT", $retval))
              {
                $sql="SELECT j.jobname, jo.jobout FROM biocore.jobs j, biocore.jobsout jo where j.wkey=jo.wkey and j.job_num=jo.jobnum and j.job_num=".$row['job_num']." and jo.wkey='$wkey'";
@@ -121,9 +181,16 @@ class funcs {
          }
          else
          {
-             return "Service ended successfully!!!";
+	     $sql="select * from service_run sr, services s where s.service_id=sr.service_id and s.servicename='$servicename' and sr.wkey='$wkey' and sr.result=1";
+             $res = $this->runSQL($sql);
+             $num_rows =$res->num_rows;
+	     if (is_object($res) && $num_rows > 0 )
+             {
+                return "Service ended successfully!!!";
+	     }
          }
-         return "RUNNING(1):$retval";
+         #return "RUNNING(1):$retval:SERVICENAME:$servicename";
+         return "RUNNING(1):SERVICENAME:$servicename";
          #return "RUNNING:(1)[$service_id][jn=$jn][".$retval."]";
          #return "RUNNING";
       }
@@ -255,7 +322,7 @@ class funcs {
         return "ERROR 003: in getServiceCommand";
    }
 
-   function startWorkflow($inputparam, $defaultparam, $username, $workflowname, $wkey, $status, $outdir)
+   function startWorkflow($inputparam, $defaultparam, $username, $workflowname, $wkey, $status, $outdir, $services)
    {
       
       if ($status=="new")
@@ -263,7 +330,7 @@ class funcs {
         #return "inputparam:$inputparam, defaultparam:$defaultparam, username:$username, workflowname:$workflowname, wkey:$wkey, outdir:$outdir";
         $workflow_id=$this->getId("workflow", $username, $workflowname, $wkey, $defaultparam);
         // sql query for INSERT INTO workflowrun
-        $sql = "INSERT INTO `workflow_run` ( `workflow_id`, `username`, `wkey`, `inputparam`, `outdir`, `result`, `start_time`) VALUES ('$workflow_id', '$username', '$wkey', '$inputparam', '$outdir', '0', now())";
+        $sql = "INSERT INTO `workflow_run` ( `workflow_id`, `username`, `wkey`, `inputparam`, `outdir`, `result`, `start_time`, `services`) VALUES ('$workflow_id', '$username', '$wkey', '$inputparam', '$outdir', '0', now(), $services)";
         $this->updateDefaultParam($workflowname, $username, $defaultparam);
 	if($result=$this->runSQL($sql))
         {
@@ -284,25 +351,27 @@ class funcs {
    {
                
         $wf = $this->getWorkflowInformation($wkey);
-        $username     = $wf[0];
-        $inputparam   = $wf[1];
-        $outdir       = $wf[2];
-        $defaultparam = $wf[3];
-
-        $service_id=$this->getId("service", $username, $servicename, $wkey);
-
-        $sql = "SELECT service_id FROM biocore.service_run where wkey='$wkey' and service_id='$service_id';";
-        $res = $this->runSQL($sql);
-	if (empty($res)=="")
+        if (is_array($wf))
         {
+          $username     = $wf[0];
+          $inputparam   = $wf[1];
+          $outdir       = $wf[2];
+          $defaultparam = $wf[3];
 
-	  // sql query for INSERT INTO service_run
-	  $sql = "INSERT INTO `service_run` (`service_id`, `wkey`, `input`,`result`, `start_time`) VALUES ('$service_id', '$wkey', '', '0', now())"; 
+          $service_id=$this->getId("service", $username, $servicename, $wkey, $defaultparam);
+
+          $sql = "SELECT service_id FROM biocore.service_run where wkey='$wkey' and service_id='$service_id';";
+          $res = $this->runSQL($sql);
+	  if (empty($res)=="")
+          {
+
+	    // sql query for INSERT INTO service_run
+	    $sql = "INSERT INTO `service_run` (`service_id`, `wkey`, `input`,`result`, `start_time`) VALUES ('$service_id', '$wkey', '', '0', now())"; 
         
-           #return "$username:$password<BR>";
+            #return "$username:$password<BR>";
         
-       	  if($result=$this->runSQL($sql))
-	  {	
+            if($result=$this->runSQL($sql))
+	    {	
 		### RUN THE JOB HERE AND UPDATE THE RESULT 1 WHEN IT IS FINISHED
                 $command=$this->getCommand($servicename, $username, $inputcommand, $defaultparam);
 
@@ -321,9 +390,15 @@ class funcs {
                    return "ERROR: $retval";
                 }
                 #return $com;
-                return "RUNNING(2):$com";
+                #return "RUNNING(2):$com";
+                return "RUNNING(2)";
                 #return "RUNNING";
-	  }
+	    }
+          }
+        }
+        else
+        {
+           return $wf;
         }
    }
 
@@ -331,7 +406,7 @@ class funcs {
    {
       $sql = "SELECT username, job_num from jobs where service_id=(SELECT service_id FROM biocore.service_run where wkey='$wkey' order by service_run_id desc limit 1)  and wkey='$wkey' and jobstatus=1;";
       $result = $this->runSQL($sql);
-      #Get how many /jobs hasn't finished
+      #Get how many jobs hasn't finished
       $ret=1;
       return $ret;
       if (is_object($result))
@@ -389,6 +464,79 @@ class funcs {
         #return "$sql1 :::: $sql2";
         return "WRUNNING";
    
+   }
+  #Insert a job to the database
+   function insertJob($username, $wkey , $com , $jobname, $servicename , $jobnum, $result)
+   {
+       $workflow_id = $this->getWorkflowId($wkey);
+       $service_id  = $this->getId("service", $username, $servicename, $wkey, "");
+
+       $sql = "insert into jobs(`username`, `wkey`, `run_script`, `jobname`, `workflow_id`, `service_id`, `result`, `submit_time`, `job_num`) values ('$username','$wkey','$com','$jobname','$workflow_id','$service_id', '$result', now(), '$jobnum')";
+
+       $res = $this->runSQL($sql);
+
+       return $res;
+   }
+
+   #Update a job to the database
+   function updateJob($username, $wkey , $jobname, $servicename, $field , $jobnum, $result)
+   {
+       $workflow_id=$this->getWorkflowId($wkey);
+       $service_id=$this->getId("service", $username, $servicename, $wkey, "");
+
+       #$sql = "update jobs set `$field`=now(), `result`='$result' where `username`= '$username' and `wkey`='$wkey' and `jobname`='$jobname' and `workflow_id`='$workflow_id' and `service_id`='$service_id' and `job_num`='$jobnum'";
+       $sql = "update jobs set `$field`=now(), `result`='$result' where `wkey`='$wkey' and `job_num`='$jobnum'";
+       #$sql1 = "select job_id, submit_time, start_time, end_time from jobs where `wkey`='$wkey' and `job_num`='$jobnum'";
+       #$res = $this->runSQL1($sql, $sql1 );
+       $res = $this->runSQL($sql);
+       return $res.":".$sql;
+   }
+   
+   #Check if all jobs are finished or not for a service
+   function checkAllJobsFinished($username, $wkey, $servicename)
+   {
+      $workflow_id=$this->getWorkflowId($wkey);
+      $service_id=$this->getId("service", $username, $servicename, $wkey, "");
+      $select  = "select count(job_id) c from jobs ";
+      $where1 = " where `username`= '$username' and `wkey`='$wkey' and `workflow_id`='$workflow_id' and `service_id`='$service_id'";
+      $where2 = " and `result`=3 ";
+      $sql = "select s1.c, s2.c from ( $select  $where1) s1,  ($select  $where1 $where2) s2";
+      $result = $this->runSQL($sql);
+      #Get how many service successfuly finished
+      if (is_object($result) && $row = $result->fetch_row())
+      {
+        $s1     = $row[0];
+        $s2     = $row[1];
+ 
+        if($s1==$s2){
+            $res=$this->updateService($wkey, $service_id, 1);
+        }
+        else
+        { 
+            $res="Should be still running 1";
+        }
+      }
+      else
+      {
+         $res="Should be still running 2";
+      }
+      return $res;
+   }
+   function updateService($wkey, $service_id, $result)
+   {
+      $sql = "update service_run set `end_time`=now(), `result`='$result' where `wkey`='$wkey' and `service_id`='$service_id'"; 
+      $res = $this->runSQL($sql);
+
+      return $res;
+   }
+   #Insert a job output to the database
+   function insertJobOut($username, $wkey , $jobnum, $jobout)
+   {
+       
+       $sql = "insert into jobsout(`username`, `wkey`, `jobnum`, `jobout`) values ('$username','$wkey','$jobnum','$jobout')";
+       $res = $this->runSQL($sql);
+       
+       return $res;
    }
 }
 ?>

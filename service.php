@@ -18,10 +18,11 @@ class Pipeline{
 	 * @param string $workflow workflow name
 	 * @param string $wkey key to run previously run workflows
 	 * @param string $outdir output directory in the cluster
+	 * @param string $services the number of services will be run on this workflow
          * 
 	 * @return string Response is a new random key if it is a new run otherwise old key.
 	 */
-	public function startWorkflow($inputparam, $defaultparam, $username, $workflow, $wkey, $outdir ){
+	public function startWorkflow($inputparam, $defaultparam, $username, $workflow, $wkey, $outdir, $services ){
 		$myClass = new funcs(); 
                 
                 $status = "exist";
@@ -30,7 +31,7 @@ class Pipeline{
  		   $wkey = $myClass->getKey();
                    $status = "new";
                 }
-		$ret=$myClass->startWorkflow($inputparam, $defaultparam, $username, $workflow, $wkey, $status, $outdir);
+		$ret=$myClass->startWorkflow($inputparam, $defaultparam, $username, $workflow, $wkey, $status, $outdir, $services);
                 if(eregi("^ERROR", $ret))
                   {
                     return $ret;
@@ -71,6 +72,96 @@ class Pipeline{
                 
 		return $result;
 	}
-        
+	
+	/**
+        * Insert a job to database
+        * 
+        * @param string $username user of the run
+        * @param string $wkey a key for the run
+        * @param string $com and parameters for the service separated with |
+        * @param string $jobname jobname that is going to be run
+        * @param string $servicename service name that is going to be run
+        * @param string $jobnum service name that is going to be run
+        * @param string $result result
+        * @return string Response
+        */
+        public function insertJob($username, $wkey , $com , $jobname, $servicename , $jobnum, $result){
+               #return "insertJob:username=$username, wkey=$wkey, com=$com, jobname=$jobname, ser=$servicename, jobnum=$jobnum, res=$result";
+
+               $myClass = new funcs();
+               $res = $myClass->insertJob($username, $wkey , $com , $jobname, $servicename , $jobnum, $result);
+               if ($res!="True")
+               {
+                    return "ERROR 150: There is an error to insert for job=$jobname, jobnumber=$jobnum"; 
+               }
+
+               return $res;
+        }
+
+        /**
+         * update a job in database
+         * 
+         * @param string $username user of the run
+         * @param string $wkey a key for the run
+         * @param string $jobname jobname that is going to be run
+         * @param string $servicename service name that is going to be run
+         * @param string $field update field: submit, start or end 
+         * @param string $jobnum service name that is going to be run
+         * @param string $result result
+         * @return string Response
+         */
+         public function updateJob($username, $wkey , $jobname, $servicename, $field, $jobnum, $result){
+               #return "updateJob:username=$username, wkey=$wkey, jobname=$jobname, ser=$servicename, field=$field, jobnum=$jobnum, res=$result";
+               $myClass = new funcs();
+               $res = $myClass->updateJob($username, $wkey , $jobname, $servicename, $field, $jobnum, $result);
+               return $res;
+               if ($res!="True")
+               {
+                    return "ERROR 151: There is an error to update $field for $jobnum"; 
+               }
+
+               return $res;
+         }
+
+        /**
+         *  Check if all the jobs are finished for a service
+         * 
+         * @param string $username user of the run
+         * @param string $wkey a key for the run
+         * @param string $servicename service name that is going to be run
+         * @return string Response
+         */
+         public function checkAllJobsFinished($username, $wkey, $servicename){
+                #return "checkAllJobsFinished:USERNAME=$username, WKEY=$wkey, SERVICE=$servicename";
+                $myClass = new funcs();
+                $res = $myClass->checkAllJobsFinished($username, $wkey , $servicename);
+                #if ($res!="True")
+                #{
+                #    return "ERROR 152: There is an error in the service $servicename!"; 
+                #}
+
+                return $res;
+         }
+        /**
+         * Insert a job output to db
+         * 
+         * @param string $username user of the run
+         * @param string $wkey a key for the run
+         * @param string $jobnum job number
+         * @param string $jobout job output
+         * @return string Response
+         */
+         function insertJobOut($username, $wkey , $jobnum, $jobout)
+         {
+                $myClass = new funcs();
+                $res = $myClass->insertJobOut($username, $wkey , $jobnum, $jobout);
+                if ($res!="True")
+                {
+                    return "ERROR 153: There is an error in the service $servicename!"; 
+                }
+
+                return $res;
+         }
+
 }
 
