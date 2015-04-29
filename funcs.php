@@ -1,14 +1,11 @@
 <?php
 
 class funcs {
-   private $dbhost       = "galaxy.umassmed.edu";
+   private $dbhost       = "localhost";
    private $db           = "biocore";
-   private $dbuser       = "biocore";
-   private $dbpass       = "biocore2013";
-   private $edir         = "/project/umw_biocore/bin/workflow";
-   private $remotehost   = "ghpcc06.umassrc.org"; 
-   private $bjobs        = "source /etc/profile;bjobs";
-   private $python       = "source /etc/profile;module load python/2.7.5;python";
+   private $dbuser       = "bioinfo";
+   private $dbpass       = "bioinfo2013";
+   private $python       = "python";
    
    function getKey()
    {
@@ -91,14 +88,24 @@ class funcs {
      }
         
    }
-   
-   function checkJobInCluster($job_num, $username)
+   #docker: wkey added, checkJobInCluster totally changed
+   function checkJobInCluster($wkey, $job_num, $username)
    {
-      $com="ssh -o ConnectTimeout=30 $username@".$this->remotehost." \"".$this->bjobs." $job_num\"|grep ".$job_num."|awk '{print \$3\"\\t\"\$1}'";
+      #$com="ssh -o ConnectTimeout=30 $username@".$this->remotehost." \"".$this->bjobs." $job_num\"|grep ".$job_num."|awk '{print \$5\"\\t\"\$1}'";
+      $com="ps -ef|grep \"[[:space:]]".$job_num."[[:space:]]\"|awk '{print \$8\"\\t\"\$1}'";
+
       $retval=$this->syscall($com);
       while(eregi("is not found", $retval))
       {
          $retval=$this->syscall($com);
+      }
+      if ($retval==""){
+        $ret = $this->checkJobInDB($wkey, $job_num, $username);
+	if ($ret == 0) { 
+           $retval="EXIT"; 
+        }else{
+	   $retval="DONE";
+        }
       }
       return $retval;
    }
@@ -128,7 +135,6 @@ class funcs {
         $service_id=$rowser['service_id'];
         $sql="select DISTINCT j.job_num job_num, j.jobname jobname, j.jobstatus jobstatus, j.result jresult, s.username username from jobs j, services s where s.service_id=j.service_id and s.servicename='$servicename' and wkey='$wkey' and jobstatus=1 and result<3";
         
-	#return $sql;
         $res = $this->runSQL($sql);
         $num_rows =$res->num_rows;   
         #Check if there are jobs which are failed or running
@@ -138,7 +144,7 @@ class funcs {
            {
              # If job is running, it turns 1 otherwise 0 and it needs to be restarted
              # If it doesn't turn Error and if job is working it turns wkey to che
-             $retval=$this->checkJobInCluster($row['job_num'], $row['username']);
+             $retval=$this->checkJobInCluster($wkey, $row['job_num'], $row['username']);
              #return $retval;
 	     /*if ($retval==0)
              {
@@ -189,8 +195,8 @@ class funcs {
                 return "Service ended successfully!!!";
 	     }
          }
-         #return "RUNNING(1):$retval:SERVICENAME:$servicename";
-         return "RUNNING(1):SERVICENAME:$servicename";
+         return "RUNNING(1):$retval:SERVICENAME:$servicename";
+         #return "RUNNING(1):SERVICENAME:$servicename";
          #return "RUNNING:(1)[$service_id][jn=$jn][".$retval."]";
          #return "RUNNING";
       }
@@ -377,12 +383,17 @@ class funcs {
 
                 $ipf="";
                 if ($inputparam != "") 
-                   $ipf="-i \\\"$inputparam\\\"";
+                   #$ipf="-i \\\"$inputparam\\\"";
+		   #docker:extra \ removed to run it without submitting
+                   $ipf="-i \"$inputparam\"";
                 $dpf="";
                 if ($defaultparam != "") 
                    $dpf="-p $defaultparam";
 
-                $com="ssh -o ConnectTimeout=30 $username@".$this->remotehost." \"".$this->python." ".$this->edir."/scripts/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \\\"$command\\\" -n $servicename -s $servicename\" 2>&1";
+		#docker: job runService command changed
+                $edir=$_SERVER["DOLPHIN_TOOLS_PATH"];
+                #$com="ssh -o ConnectTimeout=30 $username@".$this->remotehost." \"".$this->python." ".$edir."/src/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \\\"$command\\\" -n $servicename -s $servicename\" 2>&1";
+                $com=$this->python." ".$edir."/src/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \"$command\" -n $servicename -s $servicename 2>&1";
                 $retval=system($com);
                 #return $com;
                 if(eregi("Error", $retval))
@@ -390,8 +401,8 @@ class funcs {
                    return "ERROR: $retval";
                 }
                 #return $com;
-                #return "RUNNING(2):$com";
-                return "RUNNING(2)";
+                return "RUNNING(2):$com";
+                #return "RUNNING(2)";
                 #return "RUNNING";
 	    }
           }
@@ -415,7 +426,7 @@ class funcs {
          {
 	    $username=$row[0];
 	    $jobnum=$row[1];
-	    $retval=$this->checkJobInCluster($jobnum, $username);
+	    $retval=$this->checkJobInCluster($wkey, $jobnum, $username);
 	    if(eregi("^EXIT", $retval)) 
             {
 	      $ret=0;
