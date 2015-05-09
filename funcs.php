@@ -439,6 +439,8 @@ class funcs {
    function endWorkflow($wkey)
    {
         $sql = "update workflow_run set result='1', end_time=now() where wkey='$wkey'";
+        $result = $this->runSQL($sql);
+	$sql = "update ngs_runparams set run_status='1' where wkey='$wkey'";
         $result = $this->runSQL($sql);   
 		   #return $sql;
         return "Success!!!";
