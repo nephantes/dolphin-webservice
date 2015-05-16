@@ -151,6 +151,7 @@ class funcs {
                $sql="SELECT j.jobname, jo.jobout FROM biocore.jobs j, biocore.jobsout jo where j.wkey=jo.wkey and j.job_num=jo.jobnum and j.job_num=".$row['job_num']." and jo.wkey='$wkey'";
                $resout = $this->runSQL($sql);
                $rowout=$resout->fetch_assoc();
+
                require_once('class.html2text.inc');
 
                $h2t =& new html2text($rowout['jobout']);
@@ -487,6 +488,11 @@ class funcs {
    #Update a job to the database
    function updateJob($username, $wkey , $jobname, $servicename, $field , $jobnum, $result)
    {
+       if ($result == 0)
+       {
+            $sql="UPDATE ngs_runparams set run_status=3 where wkey='$wkey'";
+            $this->runSQL($sql);
+       }
        $workflow_id=$this->getWorkflowId($wkey);
        $service_id=$this->getId("service", $username, $servicename, $wkey, "");
 
