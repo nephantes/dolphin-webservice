@@ -6,24 +6,27 @@ class funcs {
    private $dbuser       = "";
    private $dbpass       = "";
    private $tool_path    = "";
+   private $remotehost   = "";
+   private $jobstatus    = "";
    private $python       = "python";
- 
+   private $params_section = "Default";
+    
    function readINI()
    {
      if ($this->dbhost=="")
      { 
-        $param_section = "Default";
-        
         if (!empty(getenv('DOLPHIN_PARAMS_SECTION'))){
-           $param_section=getenv('DOLPHIN_PARAMS_SECTION');
+           $this->params_section=getenv('DOLPHIN_PARAMS_SECTION');
         }               
         $ini = parse_ini_file("config.ini", true);
-        $ini_array = $ini[$param_section];
+        $ini_array = $ini[$this->params_section];
         $this->dbhost=$ini_array['DB_HOST'];
         $this->db=$ini_array['DB_NAME'];
         $this->dbpass=$ini_array['DB_PASSWORD'];
         $this->dbuser=$ini_array['DB_USER'];
         $this->tool_path=$ini_array['DOLPHIN_TOOLS_SRC_PATH'];
+		$this->jobstatus=$ini_array['JOB_STATUS'];
+		$this->python=$ini_array['PYTHON'];
      }
    }
  
@@ -44,7 +47,7 @@ class funcs {
    }
    function runSQL($sql)
    {
-        $this->readINI();
+    $this->readINI();
 	$link = new mysqli($this->dbhost, $this->dbuser, $this->dbpass, $this->db);
 	// check connection
 	if (mysqli_connect_errno()) { 
@@ -80,12 +83,17 @@ class funcs {
      }
         
    }
-   #docker: wkey added, checkJobInCluster totally changed
+   
    function checkJobInCluster($wkey, $job_num, $username)
    {
-      #$com="ssh -o ConnectTimeout=30 $username@".$this->remotehost." \"".$this->bjobs." $job_num\"|grep ".$job_num."|awk '{print \$5\"\\t\"\$1}'";
-      $com="ps -ef|grep \"[[:space:]]".$job_num."[[:space:]]\"|awk '{print \$8\"\\t\"\$1}'";
-
+      if ($this->params_section=="Default")
+	  {
+        $com="ssh -o ConnectTimeout=30 $username@".$this->remotehost." \"".$this->job_status." $job_num\"|grep ".$job_num."|awk '{print \$5\"\\t\"\$1}'";
+	  }
+	  else
+	  {
+	    $com="ps -ef|grep \"[[:space:]]".$job_num."[[:space:]]\"|awk '{print \$8\"\\t\"\$1}'";
+	  }
       $retval=$this->syscall($com);
       while(eregi("is not found", $retval))
       {
@@ -93,13 +101,13 @@ class funcs {
       }
       if ($retval==""){
         $ret = $this->checkJobInDB($wkey, $job_num, $username);
-	if ($ret == 0) { 
+	    if ($ret == 0) { 
            $retval="EXIT"; 
         }else{
-	   $retval="DONE";
+	       $retval="DONE";
         }
       }
-      return $retval;
+      return $retval;  
    }
    function checkJobInDB($wkey, $job_num, $username)
    {
@@ -137,21 +145,12 @@ class funcs {
              # If job is running, it turns 1 otherwise 0 and it needs to be restarted
              # If it doesn't turn Error and if job is working it turns wkey to che
              $retval=$this->checkJobInCluster($wkey, $row['job_num'], $row['username']);
-             #return $retval;
-	     /*if ($retval==0)
-             {
-               if ($ret=$this->checkJobInDB($wkey, $row['job_num'], $row['username']))
-               {
-                 return $ret;
-               }
-                
-             }*/
+
              if(eregi("^EXIT", $retval))
              {
                $sql="SELECT j.jobname, jo.jobout FROM biocore.jobs j, biocore.jobsout jo where j.wkey=jo.wkey and j.job_num=jo.jobnum and j.job_num=".$row['job_num']." and jo.wkey='$wkey'";
                $resout = $this->runSQL($sql);
                $rowout=$resout->fetch_assoc();
-
                require_once('class.html2text.inc');
 
                $h2t =& new html2text($rowout['jobout']);
@@ -188,9 +187,7 @@ class funcs {
                 return "Service ended successfully!!!";
 	     }
          }
-         return "RUNNING(1):$retval:SERVICENAME:$servicename:[".$this->dbhost."]";
-         #return "RUNNING(1):SERVICENAME:$servicename";
-         #return "RUNNING";
+         return "RUNNING(1):SERVICENAME:$servicename";
       }
       return 'START';
    }
@@ -321,11 +318,9 @@ class funcs {
    }
 
    function startWorkflow($inputparam, $defaultparam, $username, $workflowname, $wkey, $status, $outdir, $services)
-   {
-      
+   {   
       if ($status=="new")
       {
-        #return "inputparam:$inputparam, defaultparam:$defaultparam, username:$username, workflowname:$workflowname, wkey:$wkey, outdir:$outdir";
         $workflow_id=$this->getId("workflow", $username, $workflowname, $wkey, $defaultparam);
         // sql query for INSERT INTO workflowrun
         $sql = "INSERT INTO `workflow_run` ( `workflow_id`, `username`, `wkey`, `inputparam`, `outdir`, `result`, `start_time`, `services`) VALUES ('$workflow_id', '$username', '$wkey', '$inputparam', '$outdir', '0', now(), $services)";
@@ -347,11 +342,11 @@ class funcs {
 
    function startService($servicename, $wkey, $inputcommand)
    {
-        $this->readINI();
+	  $this->readINI();
                
-        $wf = $this->getWorkflowInformation($wkey);
-        if (is_array($wf))
-        {
+      $wf = $this->getWorkflowInformation($wkey);
+      if (is_array($wf))
+      {
           $username     = $wf[0];
           $inputparam   = $wf[1];
           $outdir       = $wf[2];
@@ -361,45 +356,57 @@ class funcs {
 
           $sql = "SELECT service_id FROM biocore.service_run where wkey='$wkey' and service_id='$service_id';";
           $res = $this->runSQL($sql);
-	  if (empty($res)=="")
-          {
+	   if (empty($res)=="")
+       {
 
-	    // sql query for INSERT INTO service_run
-	    $sql = "INSERT INTO `service_run` (`service_id`, `wkey`, `input`,`result`, `start_time`) VALUES ('$service_id', '$wkey', '', '0', now())"; 
+	     // sql query for INSERT INTO service_run
+	     $sql = "INSERT INTO `service_run` (`service_id`, `wkey`, `input`,`result`, `start_time`) VALUES ('$service_id', '$wkey', '', '0', now())"; 
         
             #return "$username:$password<BR>";
         
-            if($result=$this->runSQL($sql))
-	    {	
-  
-		### RUN THE JOB HERE AND UPDATE THE RESULT 1 WHEN IT IS FINISHED
+         if($result=$this->runSQL($sql))
+	     {	
+		 ### RUN THE JOB HERE AND UPDATE THE RESULT 1 WHEN IT IS FINISHED
                 $command=$this->getCommand($servicename, $username, $inputcommand, $defaultparam);
 
                 $ipf="";
-                if ($inputparam != "") 
-                   #$ipf="-i \\\"$inputparam\\\"";
-		   #docker:extra \ removed to run it without submitting
-                   $ipf="-i \"$inputparam\"";
+                if ($inputparam != "")
+				   #If the service will run over ssh we need \\\ otherwise \
+				   if ($this->params_section=="Default")
+	               {
+                       $ipf="-i \\\"$inputparam\\\"";
+				   }
+				   else
+				   {
+                       $ipf="-i \"$inputparam\"";
+				   }
                 $dpf="";
                 if ($defaultparam != "") 
                    $dpf="-p $defaultparam";
 
-		#docker: job runService command changed
+		        
                 $edir=$this->tool_path;
-                #$com="ssh -o ConnectTimeout=30 $username@".$this->remotehost." \"".$this->python." ".$edir."/src/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \\\"$command\\\" -n $servicename -s $servicename\" 2>&1";
-                $com=$this->python." ".$edir."/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \"$command\" -n $servicename -s $servicename 2>&1";
+				if ($this->params_section=="Default")
+	            {
+                    $com="ssh -o ConnectTimeout=30 $username@".$this->remotehost." \"".$this->python." ".$edir."/src/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \\\"$command\\\" -n $servicename -s $servicename\" 2>&1";
+			    }
+			    else
+			    {
+                   $com=$this->python." ".$edir."/runService.py  -d ".$this->dbhost." $ipf $dpf -o $outdir -u $username -k $wkey -c \"$command\" -n $servicename -s $servicename 2>&1";
+			    }
                 $retval=system($com);
+
                 #return $com;
                 if(eregi("Error", $retval))
                 {
                    return "ERROR: $retval";
                 }
                 #return $com;
-                return "RUNNING(2):$com";
-                #return "RUNNING(2)";
+                #return "RUNNING(2):$com";
+                return "RUNNING(2)";
                 #return "RUNNING";
-	    }
-          }
+	      }
+         }
         }
         else
         {
@@ -416,25 +423,24 @@ class funcs {
       return $ret;
       if (is_object($result))
       {
-	 while($row = $result->fetch_row())
+	   while($row = $result->fetch_row())
+       {
+	     $username=$row[0];
+	     $jobnum=$row[1];
+	     $retval=$this->checkJobInCluster($wkey, $jobnum, $username);
+	     if(eregi("^EXIT", $retval)) 
          {
-	    $username=$row[0];
-	    $jobnum=$row[1];
-	    $retval=$this->checkJobInCluster($wkey, $jobnum, $username);
-	    if(eregi("^EXIT", $retval)) 
-            {
-	      $ret=0;
-	    }
-	 }
+	        $ret=0;
+	      }
+        }
       }
-      return $ret;
-      
+      return $ret;  
    }
    function endWorkflow($wkey)
    {
         $sql = "update workflow_run set result='1', end_time=now() where wkey='$wkey'";
         $result = $this->runSQL($sql);
-	$sql = "update ngs_runparams set run_status='1' where wkey='$wkey'";
+	    $sql = "update ngs_runparams set run_status='1' where wkey='$wkey'";
         $result = $this->runSQL($sql);   
 		   #return $sql;
         return "Success!!!";
@@ -488,7 +494,7 @@ class funcs {
    #Update a job to the database
    function updateJob($username, $wkey , $jobname, $servicename, $field , $jobnum, $result)
    {
-       if ($result == 0)
+	   if ($result == 0)
        {
             $sql="UPDATE ngs_runparams set run_status=3 where wkey='$wkey'";
             $this->runSQL($sql);
@@ -498,7 +504,7 @@ class funcs {
 
        #$sql = "update jobs set `$field`=now(), `result`='$result' where `username`= '$username' and `wkey`='$wkey' and `jobname`='$jobname' and `workflow_id`='$workflow_id' and `service_id`='$service_id' and `job_num`='$jobnum'";
        $sql = "update jobs set `$field`=now(), `result`='$result' where `wkey`='$wkey' and `job_num`='$jobnum'";
-       #$sql1 = "select job_id, submit_time, start_time, end_time from jobs where `wkey`='$wkey' and `job_num`='$jobnum'";
+
        $res = $this->runSQL($sql);
        return $res.":".$sql;
    }
